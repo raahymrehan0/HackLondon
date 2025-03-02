@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+
+    <title>Zappar for A-Frame</title>
+<script src='https://aframe.io/releases/1.2.0/aframe.min.js'></script><script src='https://libs.zappar.com/zappar-aframe/2.0.0/zappar-aframe.js'></script>
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+<script type="module" src="index.js"></script>
+    <a-scene>
+        <!-- Ask user for camera permissions -->
+        <a-entity zappar-permissions-ui id="permissions"></a-entity>
+        <!-- Browser Compatibility -->
+        <a-entity zappar-compatibility-ui id="compatibility"></a-entity>
+        <a-assets>
+            <a-asset-item id="target-file" src="example-tracking-image.zpt"/>
+        </a-assets>
+
+        <a-entity camera zappar-camera></a-entity>
+
+        <a-entity zappar-image="target: #target-file" id="image-group">
+
+            <!-- PLACE 3D OBJECTS HERE TO TRACK FROM THE CENTER OF THE IMAGE -->
+            <a-box position="0 0 0.5"></a-box>
+
+        </a-entity>
+    </a-scene>
+</body>
+
+</html>
