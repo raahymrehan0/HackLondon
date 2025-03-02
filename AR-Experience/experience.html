@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Click-Based Direction Changes</title>
+    <!-- Load model-viewer web component -->
+    <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+    <!-- Add jsQR library for QR code detection -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+      html, body {
+        margin: 0; padding: 0;
+        width: 100%; height: 100%;
+        overflow: hidden;
+        position: relative;
+      }
+      /* Live camera feed fills the background */
+      #video {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        object-fit: cover;
+        z-index: 1;
+      }
+      /* Arrow overlay */
+      model-viewer {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        z-index: 2;
+        pointer-events: none;
+        background: transparent;
+      }
+      /* Full-screen invisible button to trigger orientation permission and angle updates */
+      #clickArea {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        z-index: 3;
+        background: rgba(0,0,0,0); /* fully transparent */
+        border: none;
+      }
+      /* QR code indicators */
+      .qr-indicator {
+        position: absolute;
+        z-index: 2;
+        box-sizing: border-box;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Live camera feed -->
+    <video id="video" autoplay playsinline muted></video>
+    <!-- Navigation Arrow Model (replace "arrow.glb" with your arrow model file) -->
+    <model-viewer id="arrow" src="arrow.glb" alt="Arrow" interaction-prompt="none" camera-orbit="180deg 50deg auto" style="pointer-events: none;"></model-viewer>
+    <!-- QR code detection overlay -->
+    <div id="qrIndicators"></div>
+    <!-- Canvas for QR processing (hidden) -->
+    <canvas id="qrCanvas" style="display: none;"></canvas>
+    <!-- Invisible full-screen area for clicks -->
+    <button id="clickArea"></button>
+
+    <script>
+      // Set up live camera feed
+      const video = document.getElementById('video');
+      const qrCanvas = document.getElementById('qrCanvas');
+      const qrContext = qrCanvas.getContext('2d');
+      const qrIndicators = document.getElementById('qrIndicators');
+      
+      // QR detection tracking
+      let isScanning = false;
+      let detectedCodes = new Map();
+
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false
+      })
+      .then(stream => { 
+        video.srcObject = stream; 
+        // Start QR scanning once video is loaded
+        video.addEventListener('loadedmetadata', () => {
+          startQRScanner();
+        });
+      })
+      .catch(err => { console.error('Camera error:', err); });
+
+      const arrowViewer = document.getElementById('arrow');
+
+      // Variables to hold orientation data.
+      let initialHeading = null; // Calibrated on first reading.
+      let latestHeading = null;  // Continuously updated.
+      let currentOffset = 0;     // Cumulative offset (in degrees).
+
+      // Define a sequence of angle changes (in degrees) on each click.
+      // For example, first tap adds 90°, second adds 45°, third adds 270°.
+      const angleSequence = [180, 270, 90, 90, 90, 90, 180, 270, 90, 90, 270, 90];
+      let sequenceIndex = 0;
+
+      // Device orientation handler.
+      function handleOrientation(event) {
+        latestHeading = -event.alpha; // Device heading in degrees (0 = north).
+        // On first reading, calibrate the initial heading.
+        if (initialHeading === null && latestHeading !== null) {
+          initialHeading = latestHeading;
+          console.log(`Calibrated initial heading: ${initialHeading}°`);
+        }
+        // Update the arrow display based on the current offset.
+        updateArrowDisplay();
+      }
+
+      // Update the arrow's display based on the current offset and device heading.
+      function updateArrowDisplay() {
+        if (initialHeading !== null && latestHeading !== null) {
+          // The target fixed direction is initialHeading + currentOffset.
+          // The displayed relative angle is the difference between that and the current device heading.
+          const targetDirection = (initialHeading + currentOffset) % 360;
+          const displayedAngle = targetDirection - latestHeading + 180;
+          arrowViewer.cameraOrbit = `${displayedAngle}deg 50deg auto`;
+          arrowViewer.jumpCameraToOrbit();
+          console.log(`Initial: ${initialHeading}°, Offset: ${currentOffset}°, Device: ${latestHeading}°, Target: ${targetDirection}°, Displayed: ${displayedAngle}°`);
+        }
+      }
+
+      // Click handler: on each tap, update the offset based on the sequence.
+      function handleClick() {
+        // If there's an angle defined at the current index, add it.
+        if (sequenceIndex < angleSequence.length) {
+          currentOffset = (currentOffset + angleSequence[sequenceIndex]) % 360;
+          console.log(`Click ${sequenceIndex + 1}: Added ${angleSequence[sequenceIndex]}°, new offset: ${currentOffset}°`);
+          sequenceIndex++;
+          updateArrowDisplay();
+        } else {
+          console.log('No more angle updates defined.');
+        }
+      }
+
+      // Function to enable device orientation events.
+      function enableOrientation() {
+        // Remove the click area used solely for triggering permission if it exists.
+        // (We'll keep it for handling subsequent clicks.)
+        if (typeof DeviceOrientationEvent !== 'undefined' &&
+            typeof DeviceOrientationEvent.requestPermission === 'function') {
+          DeviceOrientationEvent.requestPermission()
+            .then(permissionState => {
+              if (permissionState === 'granted') {
+                window.addEventListener('deviceorientation', handleOrientation);
+              } else {
+                console.error('Orientation permission not granted.');
+              }
+            })
+            .catch(console.error);
+        } else {
+          window.addEventListener('deviceorientation', handleOrientation);
+        }
+      }
+
+      // Attach click event to the invisible full-screen button.
+      const clickArea = document.getElementById('clickArea');
+      clickArea.addEventListener('click', () => {
+        // First click also triggers orientation permission if needed.
+        enableOrientation();
+        handleClick();
+      });
+      
+      // Start QR scanning with improved settings
+      function startQRScanner() {
+        if (isScanning) return;
+        isScanning = true;
+        
+        // Use highest possible resolution for better accuracy
+        qrCanvas.width = video.videoWidth;
+        qrCanvas.height = video.videoHeight;
+        
+        scanQRCode();
+      }
+
+      // Process video frames to find QR codes with improved accuracy
+      function scanQRCode() {
+        if (!isScanning) return;
+        
+        // Only process when video is playing and has dimensions
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+          // Draw current video frame to canvas for processing
+          qrContext.drawImage(video, 0, 0, qrCanvas.width, qrCanvas.height);
+          
+          // Apply simple image processing for better QR detection
+          // Increase contrast slightly
+          const imageData = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+          const data = imageData.data;
+          
+          // Simple contrast enhancement
+          const contrast = 1.2; // Increase contrast by 20%
+          const intercept = 128 * (1 - contrast);
+          
+          for (let i = 0; i < data.length; i += 4) {
+            // Apply to RGB channels (skip alpha)
+            data[i] = data[i] * contrast + intercept;
+            data[i+1] = data[i+1] * contrast + intercept;
+            data[i+2] = data[i+2] * contrast + intercept;
+          }
+          
+          // Put the modified image data back
+          qrContext.putImageData(imageData, 0, 0);
+          
+          // Process with more aggressive settings in jsQR
+          const code = jsQR(data, imageData.width, imageData.height, {
+            inversionAttempts: "attemptBoth", // Try both black-on-white and white-on-black
+            denseTextDetectionEnabled: false, // Focus on QR codes, not text
+            greediness: 1, // Maximum greediness for higher detection rate
+          });
+          
+          if (code) {
+            // Create a unique ID for this QR code based on its data and location
+            const qrId = `qr-${code.data}-${code.location.topLeftCorner.x}-${code.location.topLeftCorner.y}`;
+            
+            // Create or update indicator (no probability)
+            showQRIndicator(qrId, code);
+            
+            // Log detected QR code data
+            console.log("QR Code detected:", code.data);
+          }
+          
+          // Clean up old indicators
+          cleanupOldIndicators();
+        }
+        
+        // Continue scanning, but throttle slightly for better performance
+        // This actually improves accuracy by giving the algorithm more time
+        setTimeout(() => {
+          requestAnimationFrame(scanQRCode);
+        }, 30); // ~30fps instead of max fps
+      }
+
+      // Show QR indicator with border only (removed probability)
+      function showQRIndicator(id, code, probability) {
+        // Get or create indicator element
+        let indicator = document.getElementById(id);
+        if (!indicator) {
+          indicator = document.createElement('div');
+          indicator.id = id;
+          indicator.className = 'qr-indicator';
+          qrIndicators.appendChild(indicator);
+        }
+        
+        // Scale coordinates from canvas to video display size
+        const scaleX = video.offsetWidth / qrCanvas.width;
+        const scaleY = video.offsetHeight / qrCanvas.height;
+        
+        // Calculate positions for the corners
+        const topLeft = {
+          x: code.location.topLeftCorner.x * scaleX,
+          y: code.location.topLeftCorner.y * scaleY
+        };
+        const topRight = {
+          x: code.location.topRightCorner.x * scaleX,
+          y: code.location.topRightCorner.y * scaleY
+        };
+        const bottomLeft = {
+          x: code.location.bottomLeftCorner.x * scaleX,
+          y: code.location.bottomLeftCorner.y * scaleY
+        };
+        const bottomRight = {
+          x: code.location.bottomRightCorner.x * scaleX,
+          y: code.location.bottomRightCorner.y * scaleY
+        };
+        
+        // Calculate width and height
+        const width = Math.max(
+          Math.sqrt(Math.pow(topRight.x - topLeft.x, 2) + Math.pow(topRight.y - topLeft.y, 2)),
+          Math.sqrt(Math.pow(bottomRight.x - bottomLeft.x, 2) + Math.pow(bottomRight.y - bottomLeft.y, 2))
+        );
+        const height = Math.max(
+          Math.sqrt(Math.pow(bottomLeft.x - topLeft.x, 2) + Math.pow(bottomLeft.y - topLeft.y, 2)),
+          Math.sqrt(Math.pow(bottomRight.x - topRight.x, 2) + Math.pow(bottomRight.y - topRight.y, 2))
+        );
+        
+        // Position the indicator
+        indicator.style.left = `${topLeft.x}px`;
+        indicator.style.top = `${topLeft.y}px`;
+        indicator.style.width = `${width}px`;
+        indicator.style.height = `${height}px`;
+        indicator.style.border = '3px solid #00FF00'; // Green border
+        
+        // No probability text - removed
+        
+        // Track this indicator and timestamp when it was last seen
+        detectedCodes.set(id, {
+          lastSeen: Date.now(),
+          element: indicator
+        });
+      }
+
+      // Clean up indicators that haven't been seen in a while
+      function cleanupOldIndicators() {
+        const now = Date.now();
+        const expiryTime = 1000; // Remove after 1 second of not being detected
+        
+        detectedCodes.forEach((data, id) => {
+          if (now - data.lastSeen > expiryTime) {
+            if (data.element && data.element.parentNode) {
+              data.element.parentNode.removeChild(data.element);
+            }
+            detectedCodes.delete(id);
+          }
+        });
+      }
+    </script>
+  </body>
+</html>
